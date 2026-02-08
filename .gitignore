@@ -1,0 +1,5 @@
+data/balance_data.json
+data/fund_data.json
+__pycache__/
+*.pyc
+.DS_Store
