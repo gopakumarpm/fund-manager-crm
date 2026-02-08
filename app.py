@@ -11,14 +11,25 @@ import json
 import copy
 
 # --- Configuration ---
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+try:
+    DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+except Exception:
+    DATA_DIR = os.path.join(os.getcwd(), "data")
+
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except OSError:
+    # Fallback to temp directory on Streamlit Cloud if data dir not writable
+    import tempfile
+    DATA_DIR = os.path.join(tempfile.gettempdir(), "fund_manager_data")
+    os.makedirs(DATA_DIR, exist_ok=True)
+
 BALANCE_STORE = os.path.join(DATA_DIR, "balance_data.json")
 FUND_STORE = os.path.join(DATA_DIR, "fund_data.json")
 
 st.set_page_config(
     page_title="Fund Manager CRM",
-    page_icon="$",
+    page_icon="💰",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -103,11 +114,6 @@ def deserialize_from_json(obj):
 
 def save_json(filepath, data):
     """Save data dict to JSON with datetime handling."""
-    def convert(o):
-        if isinstance(o, (datetime, date)):
-            return serialize_for_json(o)
-        return o
-
     def deep_convert(obj):
         if isinstance(obj, dict):
             return {k: deep_convert(v) for k, v in obj.items()}
@@ -117,8 +123,11 @@ def save_json(filepath, data):
             return serialize_for_json(obj)
         return obj
 
-    with open(filepath, "w") as f:
-        json.dump(deep_convert(data), f, indent=2)
+    try:
+        with open(filepath, "w") as f:
+            json.dump(deep_convert(data), f, indent=2)
+    except OSError:
+        pass  # Silently fail on read-only filesystems
 
 
 def load_json(filepath):
@@ -134,10 +143,13 @@ def load_json(filepath):
             return [deep_restore(i) for i in obj]
         return obj
 
-    if os.path.exists(filepath):
-        with open(filepath, "r") as f:
-            data = json.load(f)
-        return deep_restore(data)
+    try:
+        if os.path.exists(filepath):
+            with open(filepath, "r") as f:
+                data = json.load(f)
+            return deep_restore(data)
+    except (OSError, json.JSONDecodeError):
+        pass
     return None
 
 
@@ -586,24 +598,27 @@ elif page == "Investments":
     if inv_rows:
         clean_headers = [str(h) if h else f"Col_{i}" for i, h in enumerate(inv_headers)]
         df = pd.DataFrame(inv_rows, columns=clean_headers)
-        df = df.dropna(subset=["Company"])
-        policies = df["Policy #"].unique().tolist()
+        if "Company" in df.columns:
+            df = df.dropna(subset=["Company"])
+        policy_col = "Policy #" if "Policy #" in df.columns else (clean_headers[3] if len(clean_headers) > 3 else None)
+        policies = df[policy_col].unique().tolist() if policy_col and policy_col in df.columns else []
 
         st.markdown("### Policy Summary (Latest Values)")
         policy_summaries = []
         for policy_id in policies:
-            pdata = df[df["Policy #"] == policy_id].copy()
+            pdata = df[df[policy_col] == policy_id].copy()
             pdata["Date"] = pd.to_datetime(pdata["Date"], errors="coerce")
             pdata = pdata.dropna(subset=["Date"]).sort_values("Date")
             if not pdata.empty:
                 latest = pdata.iloc[-1]
                 policy_summaries.append({
-                    "Policy #": policy_id, "Premium Date": latest.get("Premium Date", ""),
-                    "Invested Amount": safe_float(latest.get("Invested Amount")),
-                    "Fund Value": safe_float(latest.get("Fund Value")),
-                    "Growth %": safe_float(latest.get("Growth")) * 100,
-                    "Projection": safe_float(latest.get("Projection")),
-                    "Last Tracked": latest["Date"],
+                    "Policy #": policy_id,
+                    "Premium Date": latest.get("Premium Date", "") if "Premium Date" in pdata.columns else "",
+                    "Invested Amount": safe_float(latest.get("Invested Amount")) if "Invested Amount" in pdata.columns else 0,
+                    "Fund Value": safe_float(latest.get("Fund Value")) if "Fund Value" in pdata.columns else 0,
+                    "Growth %": safe_float(latest.get("Growth")) * 100 if "Growth" in pdata.columns else 0,
+                    "Projection": safe_float(latest.get("Projection")) if "Projection" in pdata.columns else 0,
+                    "Last Tracked": latest.get("Date") if "Date" in pdata.columns else "N/A",
                 })
 
         if policy_summaries:
@@ -631,17 +646,21 @@ elif page == "Investments":
         st.markdown("### Fund Value Over Time")
         view_mode = st.radio("View", ["Both Policies", "Combined Total"], horizontal=True)
         chart_df = df.copy()
-        chart_df["Date"] = pd.to_datetime(chart_df["Date"], errors="coerce")
-        chart_df = chart_df.dropna(subset=["Date"])
-        chart_df["Fund Value"] = chart_df["Fund Value"].apply(safe_float)
-        chart_df["Invested Amount"] = chart_df["Invested Amount"].apply(safe_float)
-        chart_df = chart_df.sort_values("Date")
+        if "Date" in chart_df.columns:
+            chart_df["Date"] = pd.to_datetime(chart_df["Date"], errors="coerce")
+            chart_df = chart_df.dropna(subset=["Date"])
+        if "Fund Value" in chart_df.columns:
+            chart_df["Fund Value"] = chart_df["Fund Value"].apply(safe_float)
+        if "Invested Amount" in chart_df.columns:
+            chart_df["Invested Amount"] = chart_df["Invested Amount"].apply(safe_float)
+        if "Date" in chart_df.columns:
+            chart_df = chart_df.sort_values("Date")
 
         fig = go.Figure()
         if view_mode == "Both Policies":
             colors = {"U172202558": "#64ffda", "U213366421": "#ffd700"}
             for policy_id in policies:
-                pdata = chart_df[chart_df["Policy #"] == policy_id]
+                pdata = chart_df[chart_df[policy_col] == policy_id]
                 fig.add_trace(go.Scatter(x=pdata["Date"], y=pdata["Fund Value"], mode="lines+markers",
                     name=f"{policy_id} (Fund Value)", line=dict(color=colors.get(str(policy_id), "#64ffda"), width=2), marker=dict(size=4)))
                 fig.add_trace(go.Scatter(x=pdata["Date"], y=pdata["Invested Amount"], mode="lines",
