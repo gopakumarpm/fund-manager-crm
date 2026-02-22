@@ -1,14 +1,22 @@
 import streamlit as st
-import pandas as pd
-import openpyxl
-from openpyxl.utils import get_column_letter
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, date
-import os
-import io
-import json
-import copy
+import sys
+import traceback
+
+try:
+    import pandas as pd
+    import openpyxl
+    from openpyxl.utils import get_column_letter
+    import plotly.express as px
+    import plotly.graph_objects as go
+    from datetime import datetime, date
+    import os
+    import io
+    import json
+    import copy
+except Exception as e:
+    st.error(f"Import error: {e}")
+    st.code(traceback.format_exc())
+    st.stop()
 
 # --- Configuration ---
 try:
